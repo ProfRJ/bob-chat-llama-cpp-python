@@ -1,5 +1,5 @@
 # llama-cpp-python-chat
-An asynchronous chatroom interface for llama-cpp-python. Has basic prompting for relevant and less uptight responses, as well as making new characters to chat with.
+An asynchronous chatroom interface for llama-cpp-python. Has basic prompting for relevant and less uptight responses, as well as making new characters to chat with. Also includes an idle manager to free resources when they are not needed.
 
 ## Installation:
 - Create a python venv with an optional prompt: \
