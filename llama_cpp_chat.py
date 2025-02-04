@@ -24,7 +24,6 @@ class Llama_Chat(object):
         self.bot_prompt = bot_prompt
         self.break_idle = asyncio.Event()
         self.channels = {}
-        self.n_ctx = n_ctx
         self.llm_model_path = llm_model_path
         self.idle = True
         self.idle_manager = asyncio.create_task(self._idle_manager())
@@ -159,9 +158,9 @@ class Llama_Chat(object):
             
             # If the message is for a command, use the right prompt for it, otherwise use the default chatbot prompt.
             if message['action'] == None: 
-                chat_log.append(f"--- System Character Response ---")
                 chat_log.append(bot_prompt)
-                chat_log.append(f"Given the message from {message['username']}, write a short message in response like {channel_info['bot_name']} would.")
+                chat_log.append(f"--- {channel_info['bot_name']} Response ---")
+                chat_log.append(f"Given the message from {message['username']}, write a short message in response {channel_info['bot_name']} would.")
                 chat_log.append(f"{message['username']}: {message['content']}")
                 chat_log.append(f"{channel_info['bot_name']}:")
             else:
@@ -169,6 +168,8 @@ class Llama_Chat(object):
                     chat_log.append("--- System Character Creator ---")
                     chat_log.append(f"Given the name {message['content']}, write a short characterization that includes striking elements for character in a short but descriptive manner.")
                     chat_log.append(f"{message['content']}:")
+                else:
+                    raise ValueError(f'{message['action']} is not a valid action.')
 
             prompt = '\n'.join(chat_log)
             return prompt
@@ -183,7 +184,6 @@ class Llama_Chat(object):
             if message['action'] == None:
                 channel_info['chat_log'].append(f"{message['username']}: {message['content']}")
                 channel_info['chat_log'].append(f"{channel_info['bot_name']}: {response}")
-
             if channel_info['impersonate'] and not message['action']:
                 response = f"(As {channel_info['impersonate']}):"+" "+response
             future.set_result(response) 
@@ -194,7 +194,6 @@ class Llama_Chat(object):
                 channel_info, future, message = await self.text_queue.get()
                 await process_message(channel_info, future, message)
             except Exception as exception:
-                exception = f"{type(exception).__name__}: {exception}"
                 if self.logger:
-                    self.logger.error(f"{__class__.__name__} encountered an error while replying:\n{exception}")
+                    self.logger.error(f"Llama_Chat encountered an error while replying:\n{exception}")
                 future.set_exception(exception)
