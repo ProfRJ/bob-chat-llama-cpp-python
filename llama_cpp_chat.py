@@ -168,6 +168,8 @@ class Llama_Chat(object):
                     chat_log.append("--- System Character Creator ---")
                     chat_log.append(f"Given the name {message['content']}, write a short characterization that includes striking elements for character in a short but descriptive manner.")
                     chat_log.append(f"{message['content']}:")
+                else:
+                    raise ValueError(f'{message['action']} is not a valid action.')
 
             prompt = '\n'.join(chat_log)
             return prompt
@@ -192,7 +194,6 @@ class Llama_Chat(object):
                 channel_info, future, message = await self.text_queue.get()
                 await process_message(channel_info, future, message)
             except Exception as exception:
-                exception = f"{type(exception).__name__}: {exception}"
                 if self.logger:
-                    self.logger.error(f"{__class__.__name__} encountered an error while replying:\n{exception}")
+                    self.logger.error(f"Llama_Chat encountered an error while replying:\n{exception}")
                 future.set_exception(exception)
