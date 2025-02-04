@@ -24,7 +24,6 @@ class Llama_Chat(object):
         self.bot_prompt = bot_prompt
         self.break_idle = asyncio.Event()
         self.channels = {}
-        self.n_ctx = n_ctx
         self.llm_model_path = llm_model_path
         self.idle = True
         self.idle_manager = asyncio.create_task(self._idle_manager())
@@ -159,9 +158,9 @@ class Llama_Chat(object):
             
             # If the message is for a command, use the right prompt for it, otherwise use the default chatbot prompt.
             if message['action'] == None: 
-                chat_log.append(f"--- System Character Response ---")
                 chat_log.append(bot_prompt)
-                chat_log.append(f"Given the message from {message['username']}, write a short message in response like {channel_info['bot_name']} would.")
+                chat_log.append(f"--- {channel_info['bot_name']} Response ---")
+                chat_log.append(f"Given the message from {message['username']}, write a short message in response {channel_info['bot_name']} would.")
                 chat_log.append(f"{message['username']}: {message['content']}")
                 chat_log.append(f"{channel_info['bot_name']}:")
             else:
@@ -183,7 +182,6 @@ class Llama_Chat(object):
             if message['action'] == None:
                 channel_info['chat_log'].append(f"{message['username']}: {message['content']}")
                 channel_info['chat_log'].append(f"{channel_info['bot_name']}: {response}")
-
             if channel_info['impersonate'] and not message['action']:
                 response = f"(As {channel_info['impersonate']}):"+" "+response
             future.set_result(response) 
