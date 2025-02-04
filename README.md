@@ -3,7 +3,7 @@ An asynchronous chatroom interface for llama-cpp-python. Has basic prompting for
 
 ## Installation:
 - Create a python venv with an optional prompt: \
-`python -m llama-chat .venv`
+`python -m venv .venv --prompt llama-chat`
 - Enter the python venv: \
 Linux: `source .venv/bin/activate` \
 Windows: `.venv\Scripts\activate.bat` 
