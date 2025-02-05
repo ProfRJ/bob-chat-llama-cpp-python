@@ -85,7 +85,9 @@ class Llama_Chat(object):
 
         server = self.channels.setdefault(str(server_id), {})
         channel_info = server.setdefault(str(channel_id), chat_init)
+
         channel_info['bot_name'] = bot_name
+
         if not channel_name:
             channel_info['channel_name'] = f'{bot_name.replace(" ", "-").lower()}s-place'
         else:
@@ -121,7 +123,7 @@ class Llama_Chat(object):
             """
             Generate a response based on the prompt.
             """
-            response = self.llm(prompt, **self.llm_config)
+            response = self.llm(prompt, **self.llm_config, seed=int(time.time()))
             return response['choices'][0]['text'].strip()
 
         async def make_prompt(channel_info:dict, message:dict, reply_chain:list=None) -> str:
@@ -155,21 +157,21 @@ class Llama_Chat(object):
                 chat_log.extend(reply_chain)
 
             bot_prompt = f"A few things to keep in mind about {channel_info['bot_name']}: {channel_info['bot_prompt']}"
-            
+            bot_name = channel_info['bot_name'] if not channel_info['impersonate'] else channel_info['impersonate']
+
             # If the message is for a command, use the right prompt for it, otherwise use the default chatbot prompt.
             if message['action'] == None: 
                 chat_log.append(bot_prompt)
-                chat_log.append(f"--- {channel_info['bot_name']} Response ---")
-                chat_log.append(f"Given the message from {message['username']}, write a short message in response {channel_info['bot_name']} would.")
+                chat_log.append(f"Given the message, write a short message in response like {bot_name} would.")
                 chat_log.append(f"{message['username']}: {message['content']}")
-                chat_log.append(f"{channel_info['bot_name']}:")
+                chat_log.append(f"{bot_name}:")
             else:
                 if message['action'] == 'impersonate':
-                    chat_log.append("--- System Character Creator ---")
-                    chat_log.append(f"Given the name {message['content']}, write a short characterization that includes striking elements for character in a short but descriptive manner.")
+                    chat_log.append(f"Given the name {message['content']}, write a short but detailed introduction that includes striking elements for character in a descriptive manner.")
+                    chat_log.append(f"--- System Character Creator ---")
                     chat_log.append(f"{message['content']}:")
                 else:
-                    raise ValueError(f'{message['action']} is not a valid action.')
+                    raise ValueError(f"{message['action']} is not a valid action.")
 
             prompt = '\n'.join(chat_log)
             return prompt
