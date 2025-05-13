@@ -6,8 +6,9 @@ from llama_cpp import Llama
 
 class Llama_Chat(object):
     @classmethod
-    async def create(cls, bot_prompt:str, llm_model_path:str, n_ctx:int=1024, n_gpu_layers=0, llm_config:dict={"top_k": -1, "top_p": 0.95, "typical_p":1.0, "min_p": 0, 
-    "temperature": 1.3, "repetition_penalty": 1.2, "max_tokens": 128, "stop": ["\n"]}, max_message_history:int=100, reply_ratio:float=0.75, logger=None) -> None:
+    async def create(cls, bot_prompt:str, llm_model_path:str, n_ctx:int=1024, n_gpu_layers=0, llm_config:dict={"frequency_penalty":1.0, "presence_penalty":1.0, "top_k": 30, 
+        "top_p": 0.95, "typical_p":0.5, "min_p": 0.1, "temperature": 0.8, "repeat_penalty": 1.1, "max_tokens": 128, "stop": []}, max_message_history:int=30, 
+        reply_ratio:float=0.75, logger=None) -> None:
         """
         Creates the worker class, initialising it with the given config.
 
@@ -74,20 +75,18 @@ class Llama_Chat(object):
     def get_channel_info(self, bot_name:str="Bob", channel_id:str='1', channel_name:str=None, server_id:str='system') -> dict:
         """
         Retreives data about the channel of the given message, creating an entry if it does not exist.
-
         
         bot_name - str of the chatbot's name. (default 'Bob')
         channel_id - str of an identifier to store the channel information under. (default '1')
         channel_name - optional str of the channel's name to be used in the prompt. (default f'{bot_name.replace(" ", "-").lower()}s-place')
         server_id - str of an identifier to store each channel under. (default 'system')
         """
-        chat_init = {'bot_prompt':self.bot_prompt, 'chat_log':collections.deque(maxlen=self.max_message_history), 'impersonate':None}
+        chat_init = {'bot_prompt':self.bot_prompt, 'chat_log':collections.deque(maxlen=self.max_message_history), 'impersonate':None, 'summaries': collections.deque(maxlen=int(self.max_message_history*0.1) or 1)}
 
         server = self.channels.setdefault(str(server_id), {})
         channel_info = server.setdefault(str(channel_id), chat_init)
 
         channel_info['bot_name'] = bot_name
-
         if not channel_name:
             channel_info['channel_name'] = f'{bot_name.replace(" ", "-").lower()}s-place'
         else:
@@ -96,7 +95,7 @@ class Llama_Chat(object):
 
     async def _idle_manager(self):
         """
-        Manages the llm to save memory when not in use.
+        Manages the llm object to save memory when not in use.
         """        
         while True:
             self.break_idle.clear()
@@ -131,42 +130,74 @@ class Llama_Chat(object):
             Combines the channel chat history and recent reply chain with the bot's prompt.  
             """
             chat_log = list(channel_info['chat_log'])
-            chat_log.insert(0, f"--- {channel_info['channel_name']} Channel History ---")
-            if reply_chain:
-                chat_log = [msg for msg in chat_log if msg not in reply_chain]
+            summaries = channel_info['summaries']
 
-                # shrink the chat_log in favour of the reply_chain while keeping within the max_message_history
-                # works because deques will keep the length within the max_message_history
-                if len(reply_chain)-1 + len(chat_log) > self.max_message_history:
-                    reply_ratio = int(self.reply_ratio*self.max_message_history)
-                    reply_ratio_flipped = int(reply_ratio+self.max_message_history-reply_ratio*2)
-
-                    # if the reply_chain is big enough, crop it to fit within the specified ratio
-                    if len(reply_chain) > reply_ratio:
-                        excess_reply_chain = len(reply_chain)-reply_ratio 
-                        del reply_chain[:excess_reply_chain]
-
-                    # crop the chat_log as the reply_chain grows
-                    spare_space = reply_ratio-len(reply_chain)
-                    if len(chat_log) > reply_ratio_flipped and spare_space >= 0:
-                        del chat_log[:reply_ratio-spare_space]
-                    if len(chat_log) > reply_ratio_flipped and spare_space < 0:
-                        del chat_log[:reply_ratio]
-                                 
-                reply_chain.insert(0, "--- Recent Reply Chain History ---")
-                chat_log.extend(reply_chain)
-
-            bot_prompt = f"A few things to keep in mind about {channel_info['bot_name']}: {channel_info['bot_prompt']}"
             bot_name = channel_info['bot_name'] if not channel_info['impersonate'] else channel_info['impersonate']
 
             # If the message is for a command, use the right prompt for it, otherwise use the default chatbot prompt.
             if message['action'] == None: 
-                chat_log.append(bot_prompt)
-                chat_log.append(f"Given the message, write a short message in response like {bot_name} would.")
+                # summarise here
+                if len(chat_log) >= int(self.max_message_history*0.8):
+                    num_to_summarize = int(self.max_message_history * 0.8 / 2)
+                    messages_to_summarise = chat_log[:num_to_summarize]
+                    
+                    # Prepare messages for summarization
+                    messages_to_summarise.insert(0, f"{bot_name}: {channel_info['bot_prompt']}")
+                    messages_to_summarise.insert(1, "    - Reply in a single message.")
+                    messages_to_summarise.insert(2, "    - Mind the chat history when writing a response to encourage open-endedness and continuity.")
+                    messages_to_summarise.insert(3, "    - Fight apathy and boredom with thought out creative charactisation.")
+                    messages_to_summarise.insert(4, f"--- {channel_info['channel_name']} Chat History ---")
+
+                    summary_prompt = (
+                        f"{'\n'.join(messages_to_summarise)}\n"
+                        "--- END Chat History ---\n"
+                        f"As {bot_name}, how do you feel about the conversation so far? What themes or emotions do you think are emerging?\n"
+                        f"{bot_name}:"
+                    )
+
+                    summary = await asyncio.to_thread(generate_text, summary_prompt)
+                    #    print(summary)
+                    summary = f"{bot_name}: {summary}"
+                    summaries.append(summary)
+
+                    del chat_log[:num_to_summarize]
+                    for item in range(num_to_summarize):
+                        del channel_info['chat_log'][0]
+
+                if reply_chain:
+                    chat_log = [msg for msg in chat_log if msg not in reply_chain]
+                    # shrink the chat_log in favour of the reply_chain while keeping within the max_message_history
+                    # works because deques will keep the length within the max_message_history
+                    if len(reply_chain) + len(chat_log) > self.max_message_history:
+                        reply_ratio = int(self.reply_ratio*self.max_message_history)
+                        reply_ratio_flipped = int(reply_ratio+self.max_message_history-reply_ratio*2)
+
+                        # if the reply_chain is big enough, crop it to fit within the specified ratio
+                        if len(reply_chain) > reply_ratio:
+                            excess_reply_chain = len(reply_chain)-reply_ratio 
+                            del reply_chain[:excess_reply_chain]
+
+                        # crop the chat_log as the reply_chain grows
+                        spare_space = reply_ratio-len(reply_chain)
+                        if len(chat_log) > reply_ratio_flipped and spare_space >= 0:
+                            del chat_log[:reply_ratio-spare_space]
+                        if len(chat_log) > reply_ratio_flipped and spare_space < 0:
+                            del chat_log[:reply_ratio]
+
+                    chat_log.extend(reply_chain)
+
+                chat_log.insert(0, f"{bot_name}: {channel_info['bot_prompt']}")
+                chat_log.insert(1, "    - Mind the chat history when writing a response to encourage open-endedness and continuity.")
+                chat_log.insert(2, "    - Fight apathy and boredom with thought out creative charactisation.")
+                chat_log.insert(3, f"--- {channel_info['channel_name']} Chat History ---")
+                if summaries:
+                    chat_log.insert(4, '\n'.join(summaries))
+                chat_log.append("--- END Chat History ---")
                 chat_log.append(f"{message['username']}: {message['content']}")
                 chat_log.append(f"{bot_name}:")
             else:
                 if message['action'] == 'impersonate':
+                    chat_log.clear()
                     chat_log.append(f"Given the name {message['content']}, write a short but detailed introduction that includes striking elements for character in a descriptive manner.")
                     chat_log.append(f"--- System Character Creator ---")
                     chat_log.append(f"{message['content']}:")
@@ -176,19 +207,28 @@ class Llama_Chat(object):
             prompt = '\n'.join(chat_log)
             return prompt
 
-        async def process_message(channel_info, future, message) -> str:
+        async def process_message(channel_info:dict, future:asyncio.Future, message:dict) -> str:
             """
             Prepare and send a response for the user message using a channel specific prompt.
             """
             prompt = await make_prompt(channel_info, message, message['reply_list'])
             response = await asyncio.to_thread(generate_text, prompt)
-            # Save the message pair together for better consistency.
+            
+            bot_responses = []
+            for line in response.split('\n'):
+                if line.startswith(channel_info['bot_name']) or response.index(line) == 0:
+                    line = line.replace(f'{channel_info['bot_name']}: ', '').strip()
+                    bot_responses.append(line)
+                    if channel_info['impersonate'] and not message['action']:
+                        line = f"(As {channel_info['impersonate']}):"+" "+line
+                else:
+                    break
+
+            # Save the messages together for better consistency.
             if message['action'] == None:
                 channel_info['chat_log'].append(f"{message['username']}: {message['content']}")
-                channel_info['chat_log'].append(f"{channel_info['bot_name']}: {response}")
-            if channel_info['impersonate'] and not message['action']:
-                response = f"(As {channel_info['impersonate']}):"+" "+response
-            future.set_result(response) 
+                channel_info['chat_log'].extend([f'{channel_info['bot_name']}: ' + response.strip() for response in bot_responses])
+            future.set_result(bot_responses) 
 
         while True:
             ### Worker Loop ###
