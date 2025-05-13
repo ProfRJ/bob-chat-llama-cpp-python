@@ -20,7 +20,6 @@ llama_chat = await Llama_Chat.create(
 ```
 - Call the Object:
 
-This will return a list of replies from the bot, depending on how many messages the bot has decided to write.
 ```
 response = await llama_chat(content="Hi.", username="user")
 ```
