@@ -20,11 +20,11 @@ llama_chat = await Llama_Chat.create(
 ```
 - Call the Object:
 
+This will return a list of replies from the bot, depending on how many messages the bot has decided to write.
 ```
 response = await llama_chat(content="Hi.", username="user")
 ```
-
-By default, all messages will go to the same channel. If things aren't so simple you can use a dedicated channel to store different conversations.
+By default, all messages will be stored together.  If things aren't so simple you can use a dedicated channel to store different conversations.
 ```
 channel_info = llama_chat.get_channel_info(channel_bot_username="Bob", channel_id="1", channel_name="bobs-place", server_id="1")
 response = await llama_chat(content="Hi.", channel_info=channel_info, username="user")
