@@ -88,7 +88,7 @@ class Llama_Chat(object):
         server_id - str of an identifier to store each channel under. (default 'system')
         """
         chat_init = {'bot_prompt':self.bot_prompt, 'chat_log':collections.deque(maxlen=self.max_message_history), 'impersonate':None, 'message_count':0,
-        'summaries': collections.deque(maxlen=int(self.max_message_history*0.2) or 1)}
+        'summaries': collections.deque(maxlen=self.max_summarisation_history)}
 
         server = self.channels.setdefault(str(server_id), {})
         channel_info = server.setdefault(str(channel_id), chat_init)
