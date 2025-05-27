@@ -6,23 +6,26 @@ from llama_cpp import Llama
 
 class Llama_Chat(object):
     @classmethod
-    async def create(cls, bot_prompt:str, llm_model_path:str, n_ctx:int=1024, n_gpu_layers=0, llm_config:dict={"frequency_penalty":1.0, "presence_penalty":1.0, "top_k": 30, 
-        "top_p": 0.95, "typical_p":0.5, "min_p": 0.1, "temperature": 0.8, "repeat_penalty": 1.1, "max_tokens": 128, "stop": []}, max_message_history:int=30, 
-        reply_ratio:float=0.75, logger=None) -> None:
+    async def create(cls, bot_prompt:[str], llm_model_path:str, n_ctx:int=1024, n_gpu_layers=0, llm_config:dict={"frequency_penalty":1.0, "presence_penalty":1.0, "top_k": 30, 
+        "top_p": 0.95, "typical_p":0.4, "min_p": 0.1, "temperature": 0.9, "repeat_penalty": 1.1, "max_tokens": 128, "stop": []}, max_message_history:int=30, max_summarisation_history:int=10,
+        reply_ratio:float=0.75, summarisation_interval:int=15, summarisation_percent:int=0.4, logger=None) -> object:
         """
         Creates the worker class, initialising it with the given config.
 
-        bot_prompt - str containing a description about the bot.
+        bot_prompt - list of strings containing a description about the bot.
         llm_model_path - str or pathlike object that points to the location of the llm.
-        context_length - int setting how many tokens of context can be used for each generation. (default 1024)
-        gpu_layers - int setting how much of the model can be put onto the gpu requires cuda. (default 0)
-        llm_config - dict containing the settings used for each request to the llm. (see https://docs.vllm.ai/en/latest/dev/sampling_params.html)
+        llm_config - dict containing the settings used for each request to the llm. (default {"frequency_penalty":1.0, "presence_penalty":1.0, "top_k": 30, "top_p": 0.95, "typical_p":0.4, "min_p": 0.1, "temperature": 0.9, "repeat_penalty": 1.1, "max_tokens": 128, "stop": []})
         max_message_history - int setting the message cap for each channel. (default 100)
+        max_summarisation_history - int settings the summarisation cap for each channel. (default 10)
+        n_gpu_layers - int setting how much of the model can be put onto the gpu requires cuda. (default 0)
+        n_ctx - int setting how many tokens of context can be used for each generation. (default 1024)
         reply_ratio - float setting how much the channel chatlog will shrink to fit in the max_message_history if given a long enough reply_list. (default 0.75)
+        summarisation_interval - int setting how often the chat will be summarised. (default 15)
+        summarisation_percent - float within 0 and 1 to determine the amount of messages to be summarised from a percent of `summarisation_interval`. (default 0.4)
         logger - logging object (default None)
         """
         self = Llama_Chat()
-        self.bot_prompt = bot_prompt
+        self.bot_prompt = bot_prompt if isinstance(bot_prompt, list) else [bot_prompt]
         self.break_idle = asyncio.Event()
         self.channels = {}
         self.llm_model_path = llm_model_path
@@ -31,14 +34,17 @@ class Llama_Chat(object):
         self.llm_config = llm_config
         self.logger = logger
         self.max_message_history = max_message_history
+        self.max_summarisation_history = max_summarisation_history
         self.n_ctx = n_ctx
         self.n_gpu_layers = n_gpu_layers
         self.reply_ratio = reply_ratio
+        self.summarisation_interval = summarisation_interval
+        self.summarisation_percent = summarisation_percent
         self.text_queue = asyncio.Queue(maxsize=0)
         self.text_worker = asyncio.create_task(self._text_worker())
         return self
         
-    async def __call__(self, content:str, action:str=None, channel_info:dict=None, reply_list:[str]=None, username:str='user'):
+    async def __call__(self, content:str, action:str=None, channel_info:dict=None, reply_list:[str]=None, username:str='user') -> [str]:
         """
         Formats the incoming message to send to the llm, which then returns the llm's response asynchronously.
         
@@ -81,7 +87,8 @@ class Llama_Chat(object):
         channel_name - optional str of the channel's name to be used in the prompt. (default f'{bot_name.replace(" ", "-").lower()}s-place')
         server_id - str of an identifier to store each channel under. (default 'system')
         """
-        chat_init = {'bot_prompt':self.bot_prompt, 'chat_log':collections.deque(maxlen=self.max_message_history), 'impersonate':None, 'summaries': collections.deque(maxlen=int(self.max_message_history*0.1) or 1)}
+        chat_init = {'bot_prompt':self.bot_prompt, 'chat_log':collections.deque(maxlen=self.max_message_history), 'impersonate':None, 'message_count':0,
+        'summaries': collections.deque(maxlen=int(self.max_message_history*0.2) or 1)}
 
         server = self.channels.setdefault(str(server_id), {})
         channel_info = server.setdefault(str(channel_id), chat_init)
@@ -114,6 +121,43 @@ class Llama_Chat(object):
             else:
                 await self.break_idle.wait()
 
+    async def update_llm_config(self, frequency_penalty:float=None, presence_penalty:float=None, top_k:int=None, top_p:float=None, typical_p:float=None, min_p:float=None, temperature:float=None,
+        repeat_penalty:float=None, max_tokens:int=None, stop:[str]=None):
+        if frequency_penalty:
+            self.llm_config['frequency_penalty'] = frequency_penalty
+        if presence_penalty:
+            self.llm_config['presence_penalty'] = presence_penalty
+        if top_k:
+            self.llm_config['top_k'] = top_k
+        if top_p:
+            self.llm_config['top_p'] = top_p
+        if typical_p:
+            self.llm_config['typical_p'] = typical_p
+        if min_p:
+            self.llm_config['min_p'] = min_p
+        if temperature:
+            self.llm_config['temperature'] = temperature
+        if repeat_penalty:
+            self.llm_config['repeat_penalty'] = repeat_penalty
+        if max_tokens:
+            self.llm_config['max_tokens'] = max_tokens
+        if stop:
+            self.llm_config['stop'] = stop
+        return self.llm_config
+
+    def prune_messages_to_list(self, action:str, bot_name:str, impersonate:str, response:str) -> list:
+        bot_responses = []
+        bot_name = bot_name if not impersonate else impersonate
+        if impersonate and not action:
+            response = f"(As {impersonate}):"+" "+response
+        for line in response.split('\n'):
+            if line.startswith(bot_name) or response.index(line) == 0:
+                line = line.replace(f'{bot_name}: ', '').strip()
+                bot_responses.append(line)
+            else:
+                break
+        return bot_responses
+
     async def _text_worker(self) -> None:
         """
         This asynchronous worker loop is responsible for processing messages one by one from the FIFO text_queue.
@@ -136,13 +180,12 @@ class Llama_Chat(object):
 
             # If the message is for a command, use the right prompt for it, otherwise use the default chatbot prompt.
             if message['action'] == None: 
-                # summarise here
-                if len(chat_log) >= int(self.max_message_history*0.8):
-                    num_to_summarize = int(self.max_message_history * 0.8 / 2)
-                    messages_to_summarise = chat_log[:num_to_summarize]
-                    
+                channel_info['message_count'] += 1
+                if channel_info['message_count'] % self.summarisation_interval == 0 and channel_info['message_count']:
                     # Prepare messages for summarization
-                    messages_to_summarise.insert(0, f"{bot_name}: {channel_info['bot_prompt']}")
+                    num_to_summarize = int(self.summarisation_interval * self.summarisation_percent)
+                    messages_to_summarise = chat_log[:num_to_summarize]
+                    messages_to_summarise.insert(0, '\n'.join([f"{bot_name}: {prompt}" for prompt in channel_info['bot_prompt']]))
                     messages_to_summarise.insert(1, "    - Reply in a single message.")
                     messages_to_summarise.insert(2, "    - Mind the chat history when writing a response to encourage open-endedness and continuity.")
                     messages_to_summarise.insert(3, "    - Fight apathy and boredom with thought out creative charactisation.")
@@ -155,10 +198,9 @@ class Llama_Chat(object):
                         f"{bot_name}:"
                     )
 
-                    summary = await asyncio.to_thread(generate_text, summary_prompt)
-                    #    print(summary)
-                    summary = f"{bot_name}: {summary}"
-                    summaries.append(summary)
+                    responses = await asyncio.to_thread(generate_text, summary_prompt)
+                    bot_responses = self.prune_messages_to_list(message['action'], channel_info['bot_name'], channel_info['impersonate'], responses)
+                    summaries.extend([f"{bot_name}: {summary}" for summary in bot_responses])
 
                     del chat_log[:num_to_summarize]
                     for item in range(num_to_summarize):
@@ -186,13 +228,16 @@ class Llama_Chat(object):
 
                     chat_log.extend(reply_chain)
 
-                chat_log.insert(0, f"{bot_name}: {channel_info['bot_prompt']}")
-                chat_log.insert(1, "    - Mind the chat history when writing a response to encourage open-endedness and continuity.")
-                chat_log.insert(2, "    - Fight apathy and boredom with thought out creative charactisation.")
-                chat_log.insert(3, f"--- {channel_info['channel_name']} Chat History ---")
+                chat_log.insert(0, '\n'.join([f"{bot_name}: {prompt}" for prompt in channel_info['bot_prompt']]))
+                chat_log.insert(1, f"--- {channel_info['channel_name']} Chat History ---")
                 if summaries:
-                    chat_log.insert(4, '\n'.join(summaries))
+                    chat_log.insert(1, '\n'.join(summaries))
+
                 chat_log.append("--- END Chat History ---")
+                chat_log.append("    - Mind the chat history when writing a response to encourage open-endedness and continuity.")
+                chat_log.append("    - Fight apathy and boredom with thought out creative charactisation.")
+                chat_log.append("    - Keep focused on what is in the chat, be concise.")
+                chat_log.append("    - Reply in a single message if possible.")
                 chat_log.append(f"{message['username']}: {message['content']}")
                 chat_log.append(f"{bot_name}:")
             else:
@@ -207,27 +252,19 @@ class Llama_Chat(object):
             prompt = '\n'.join(chat_log)
             return prompt
 
-        async def process_message(channel_info:dict, future:asyncio.Future, message:dict) -> str:
+        async def process_message(channel_info:dict, future:asyncio.Future, message:dict) -> [str]:
             """
             Prepare and send a response for the user message using a channel specific prompt.
             """
             prompt = await make_prompt(channel_info, message, message['reply_list'])
-            response = await asyncio.to_thread(generate_text, prompt)
-            
-            bot_responses = []
-            for line in response.split('\n'):
-                if line.startswith(channel_info['bot_name']) or response.index(line) == 0:
-                    line = line.replace(f'{channel_info['bot_name']}: ', '').strip()
-                    bot_responses.append(line)
-                    if channel_info['impersonate'] and not message['action']:
-                        line = f"(As {channel_info['impersonate']}):"+" "+line
-                else:
-                    break
+            responses = await asyncio.to_thread(generate_text, prompt)
+            bot_responses = self.prune_messages_to_list(message['action'], channel_info['bot_name'], channel_info['impersonate'], responses)
+            bot_name = channel_info['bot_name'] if not channel_info['impersonate'] else channel_info['impersonate']
 
             # Save the messages together for better consistency.
             if message['action'] == None:
                 channel_info['chat_log'].append(f"{message['username']}: {message['content']}")
-                channel_info['chat_log'].extend([f'{channel_info['bot_name']}: ' + response.strip() for response in bot_responses])
+                channel_info['chat_log'].extend([f'{bot_name}: ' + response.strip() for response in bot_responses])
             future.set_result(bot_responses) 
 
         while True:
