@@ -25,7 +25,7 @@ class Llama_Chat(object):
         logger - logging object (default None)
         """
         self = Llama_Chat()
-        self.bot_prompt = bot_prompt if isinstance(bot_prompt, list) else [bot_prompt]
+        self.bot_prompt = bot_prompt
         self.break_idle = asyncio.Event()
         self.channels = {}
         self.llm_model_path = llm_model_path
@@ -228,7 +228,8 @@ class Llama_Chat(object):
 
                     chat_log.extend(reply_chain)
 
-                chat_log.insert(0, '\n'.join([f"{bot_name}: {prompt}" for prompt in channel_info['bot_prompt']]))
+                bot_prompt = channel_info['bot_prompt'] if not isinstance(channel_info['bot_prompt'], list) else [channel_info['bot_prompt']]
+                chat_log.insert(0, '\n'.join([f"{bot_name}: {prompt}" for prompt in bot_prompt]))
                 chat_log.insert(1, f"--- {channel_info['channel_name']} Chat History ---")
                 if summaries:
                     chat_log.insert(1, '\n'.join(summaries))
