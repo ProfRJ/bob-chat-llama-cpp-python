@@ -14,7 +14,8 @@ class Llama_Chat(object):
 
         bot_prompt - list of strings containing a description about the bot.
         llm_model_path - str or pathlike object that points to the location of the llm.
-        llm_config - dict containing the settings used for each request to the llm. (default {"frequency_penalty":1.0, "presence_penalty":1.0, "top_k": 30, "top_p": 0.95, "typical_p":0.4, "min_p": 0.1, "temperature": 0.9, "repeat_penalty": 1.1, "max_tokens": 128, "stop": []})
+        llm_config - dict containing the settings used for each request to the llm. (default {"frequency_penalty":1.0, "presence_penalty":1.0, "top_k": 30, "top_p": 0.95, "typical_p":0.4, "min_p": 0.1, 
+        "temperature": 0.9, "repeat_penalty": 1.1, "max_tokens": 128, "stop": []}) (see https://llama-cpp-python.readthedocs.io/en/latest/api-reference/#llama_cpp.Llama.__call__)
         max_message_history - int setting the message cap for each channel. (default 100)
         max_summarisation_history - int settings the summarisation cap for each channel. (default 10)
         n_gpu_layers - int setting how much of the model can be put onto the gpu requires cuda. (default 0)
@@ -87,7 +88,7 @@ class Llama_Chat(object):
         channel_name - optional str of the channel's name to be used in the prompt. (default f'{bot_name.replace(" ", "-").lower()}s-place')
         server_id - str of an identifier to store each channel under. (default 'system')
         """
-        chat_init = {'bot_prompt':self.bot_prompt, 'chat_log':collections.deque(maxlen=self.max_message_history), 'impersonate':None, 'message_count':0,
+        chat_init = {'bot_prompt':self.bot_prompt, 'chat_log':collections.deque(maxlen=self.max_message_history), 'impersonate':None, 'llm_config': self.llm_config, 'message_count':0,
         'summaries': collections.deque(maxlen=self.max_summarisation_history)}
 
         server = self.channels.setdefault(str(server_id), {})
@@ -121,31 +122,39 @@ class Llama_Chat(object):
             else:
                 await self.break_idle.wait()
 
-    async def update_llm_config(self, frequency_penalty:float=None, presence_penalty:float=None, top_k:int=None, top_p:float=None, typical_p:float=None, min_p:float=None, temperature:float=None,
-        repeat_penalty:float=None, max_tokens:int=None, stop:[str]=None):
+    async def update_llm_config(self, llm_config:dict, frequency_penalty:float=None, presence_penalty:float=None, top_k:int=None, top_p:float=None, typical_p:float=None, min_p:float=None, temperature:float=None,
+        repeat_penalty:float=None, max_tokens:int=None, stop:[str]=None) -> dict:
+        """
+        Helper function to change a channel's llm generation config.
+
+        args: see https://llama-cpp-python.readthedocs.io/en/latest/api-reference/#llama_cpp.Llama.__call__
+        """
         if frequency_penalty:
-            self.llm_config['frequency_penalty'] = frequency_penalty
+            llm_config['frequency_penalty'] = frequency_penalty
         if presence_penalty:
-            self.llm_config['presence_penalty'] = presence_penalty
+            llm_config['presence_penalty'] = presence_penalty
         if top_k:
-            self.llm_config['top_k'] = top_k
+            llm_config['top_k'] = top_k
         if top_p:
-            self.llm_config['top_p'] = top_p
+            llm_config['top_p'] = top_p
         if typical_p:
-            self.llm_config['typical_p'] = typical_p
+            llm_config['typical_p'] = typical_p
         if min_p:
-            self.llm_config['min_p'] = min_p
+            llm_config['min_p'] = min_p
         if temperature:
-            self.llm_config['temperature'] = temperature
+            llm_config['temperature'] = temperature
         if repeat_penalty:
-            self.llm_config['repeat_penalty'] = repeat_penalty
+            llm_config['repeat_penalty'] = repeat_penalty
         if max_tokens:
-            self.llm_config['max_tokens'] = max_tokens
+            llm_config['max_tokens'] = max_tokens
         if stop:
-            self.llm_config['stop'] = stop
-        return self.llm_config
+            llm_config['stop'] = stop
+        return llm_config
 
     def prune_messages_to_list(self, action:str, bot_name:str, impersonate:str, response:str) -> list:
+        """
+        Takes a complete llm response and filters it so only the bot's initial responses are kept to keep out hallucinated users and returns the result as a list. 
+        """
         bot_responses = []
         bot_name = bot_name if not impersonate else impersonate
         if impersonate and not action:
@@ -162,11 +171,11 @@ class Llama_Chat(object):
         """
         This asynchronous worker loop is responsible for processing messages one by one from the FIFO text_queue.
         """
-        def generate_text(prompt:str) -> str:
+        def generate_text(prompt:str, llm_config:dict) -> str:
             """
             Generate a response based on the prompt.
             """
-            response = self.llm(prompt, **self.llm_config, seed=int(time.time()))
+            response = self.llm(prompt, **llm_config, seed=int(time.time()))
             return response['choices'][0]['text'].strip()
 
         async def make_prompt(channel_info:dict, message:dict, reply_chain:list=None) -> str:
@@ -198,7 +207,7 @@ class Llama_Chat(object):
                         f"{bot_name}:"
                     )
 
-                    responses = await asyncio.to_thread(generate_text, summary_prompt)
+                    responses = await asyncio.to_thread(generate_text, summary_prompt, channel_info['llm_config'])
                     bot_responses = self.prune_messages_to_list(message['action'], channel_info['bot_name'], channel_info['impersonate'], responses)
                     summaries.extend([f"{bot_name}: {summary}" for summary in bot_responses])
 
@@ -228,17 +237,17 @@ class Llama_Chat(object):
 
                     chat_log.extend(reply_chain)
 
-                bot_prompt = channel_info['bot_prompt'] if not isinstance(channel_info['bot_prompt'], list) else [channel_info['bot_prompt']]
-                chat_log.insert(0, '\n'.join([f"{bot_name}: {prompt}" for prompt in bot_prompt]))
-                chat_log.insert(1, f"--- {channel_info['channel_name']} Chat History ---")
+                bot_prompt = channel_info['bot_prompt'] if isinstance(channel_info['bot_prompt'], list) else [channel_info['bot_prompt']]
+                chat_log.insert(0, "    - Mind the chat history when writing a response to encourage open-endedness and continuity.")
+                chat_log.insert(1, "    - Fight apathy and boredom with thought out creative charactisation.")
+                chat_log.insert(2, "    - Only mention names of people in the chat.")
+                chat_log.insert(3, "    - Reply in a single message.")
+                chat_log.insert(4, '\n'.join([f"{bot_name}: {prompt}" for prompt in bot_prompt]))
+                chat_log.insert(5, f"--- {channel_info['channel_name']} Chat History ---")
                 if summaries:
-                    chat_log.insert(1, '\n'.join(summaries))
-
+                    chat_log.insert(5, '\n'.join(summaries))
                 chat_log.append("--- END Chat History ---")
-                chat_log.append("    - Mind the chat history when writing a response to encourage open-endedness and continuity.")
-                chat_log.append("    - Fight apathy and boredom with thought out creative charactisation.")
-                chat_log.append("    - Keep focused on what is in the chat, be concise.")
-                chat_log.append("    - Reply in a single message if possible.")
+                chat_log.append(f"--- {bot_name} Response ---")
                 chat_log.append(f"{message['username']}: {message['content']}")
                 chat_log.append(f"{bot_name}:")
             else:
@@ -258,7 +267,7 @@ class Llama_Chat(object):
             Prepare and send a response for the user message using a channel specific prompt.
             """
             prompt = await make_prompt(channel_info, message, message['reply_list'])
-            responses = await asyncio.to_thread(generate_text, prompt)
+            responses = await asyncio.to_thread(generate_text, prompt, channel_info['llm_config'])
             bot_responses = self.prune_messages_to_list(message['action'], channel_info['bot_name'], channel_info['impersonate'], responses)
             bot_name = channel_info['bot_name'] if not channel_info['impersonate'] else channel_info['impersonate']
 
