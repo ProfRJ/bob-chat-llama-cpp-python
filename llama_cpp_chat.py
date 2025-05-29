@@ -73,7 +73,7 @@ class Llama_Chat(object):
                     text = text[text.find('): ')+3:]
                     reply_list[index] = f"{impersonate}: {text}"
 
-        message = {'action':action, 'content':content, 'reply_list':reply_list, 'username':username}
+        message = {'action':action, 'content':content.replace(f'@{channel_info['bot_name']}', '').strip(), 'reply_list':reply_list, 'username':username}
 
         future = asyncio.Future()
         await self.text_queue.put((channel_info, future, message))
@@ -190,8 +190,8 @@ class Llama_Chat(object):
             # If the message is for a command, use the right prompt for it, otherwise use the default chatbot prompt.
             if message['action'] == None: 
                 channel_info['message_count'] += 1
-                if channel_info['message_count'] % self.summarisation_interval == 0 and channel_info['message_count']:
-                    # Prepare messages for summarization
+                if channel_info['message_count'] // self.summarisation_interval >= 1:
+                    channel_info['message_count'] = 0
                     num_to_summarize = int(self.summarisation_interval * self.summarisation_percent)
                     messages_to_summarise = chat_log[:num_to_summarize]
                     messages_to_summarise.insert(0, '\n'.join([f"{bot_name}: {prompt}" for prompt in channel_info['bot_prompt']]))
@@ -238,16 +238,17 @@ class Llama_Chat(object):
                     chat_log.extend(reply_chain)
 
                 bot_prompt = channel_info['bot_prompt'] if isinstance(channel_info['bot_prompt'], list) else [channel_info['bot_prompt']]
-                chat_log.insert(0, "    - Mind the chat history when writing a response to encourage open-endedness and continuity.")
-                chat_log.insert(1, "    - Fight apathy and boredom with thought out creative charactisation.")
-                chat_log.insert(2, "    - Only mention names of people in the chat.")
-                chat_log.insert(3, "    - Reply in a single message.")
-                chat_log.insert(4, '\n'.join([f"{bot_name}: {prompt}" for prompt in bot_prompt]))
-                chat_log.insert(5, f"--- {channel_info['channel_name']} Chat History ---")
+                
+                chat_log.insert(0, '\n'.join([f"{bot_name}: {prompt}" for prompt in bot_prompt]))
+                chat_log.insert(1, f"--- {channel_info['channel_name']} Chat History ---")
                 if summaries:
-                    chat_log.insert(5, '\n'.join(summaries))
-                chat_log.append("--- END Chat History ---")
-                chat_log.append(f"--- {bot_name} Response ---")
+                    chat_log.insert(1, '\n'.join(summaries))
+                chat_log.append("    - Mind the chat history when writing a response to encourage open-endedness and continuity.")
+                chat_log.append("    - Fight apathy and boredom with thought out creative charactisation.")
+                chat_log.append("    - Only mention names of people in the chat.")
+                chat_log.append("    - Reply in a single message.")
+                chat_log.append(f"Given these rules and the history of the chat, write a characteristic reply to {message['username']} from {bot_name}.")    
+                #chat_log.append("--- END Chat History ---")
                 chat_log.append(f"{message['username']}: {message['content']}")
                 chat_log.append(f"{bot_name}:")
             else:
@@ -275,6 +276,7 @@ class Llama_Chat(object):
             if message['action'] == None:
                 channel_info['chat_log'].append(f"{message['username']}: {message['content']}")
                 channel_info['chat_log'].extend([f'{bot_name}: ' + response.strip() for response in bot_responses])
+                channel_info['message_count'] += len(bot_responses) 
             future.set_result(bot_responses) 
 
         while True:
