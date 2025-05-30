@@ -7,7 +7,7 @@ from llama_cpp import Llama
 class Llama_Chat(object):
     @classmethod
     async def create(cls, bot_prompt:[str], llm_model_path:str, n_ctx:int=1024, n_gpu_layers=0, llm_config:dict={"frequency_penalty":1.0, "presence_penalty":1.0, "top_k": 30, 
-        "top_p": 0.95, "typical_p":0.4, "min_p": 0.1, "temperature": 0.9, "repeat_penalty": 1.1, "max_tokens": 128, "stop": []}, max_message_history:int=30, max_summarisation_history:int=10,
+        "top_p": 0.95, "typical_p":0.4, "min_p": 0.1, "temperature": 0.9, "repeat_penalty": 1.1, "max_tokens": 128}, max_message_history:int=30, max_summarisation_history:int=10,
         reply_ratio:float=0.75, summarisation_interval:int=15, summarisation_percent:int=0.4, logger=None) -> object:
         """
         Creates the worker class, initialising it with the given config.
@@ -33,6 +33,7 @@ class Llama_Chat(object):
         self.idle = True
         self.idle_manager = asyncio.create_task(self._idle_manager())
         self.llm_config = llm_config
+        self.llm_config['stop'] = ['\n']
         self.logger = logger
         self.max_message_history = max_message_history
         self.max_summarisation_history = max_summarisation_history
@@ -64,15 +65,22 @@ class Llama_Chat(object):
             channel_info = self.get_channel_info()
         if reply_list:
             # dodgy code that ensures the bot replies have the right identity in the reply_chain 
+            last_author = None
+            last_impersonate= None
             for index, message in enumerate(reply_list):
                 message = message.split(':')
-                author, text = message[0], message[1].strip()
-                impersonate = None
-                if text.startswith('(As '):
-                    impersonate = text[text.find('(As ')+4:text.find('): ')]
-                    text = text[text.find('): ')+3:]
+                if len(message) >= 3 and '(As ' in message[1]:
+                    author, impersonate, text = message[0], message[1], ' '.join(message[2:]).strip()
+                    last_author = author
+                    impersonate = impersonate[5:-1]
+                    last_impersonate = impersonate
                     reply_list[index] = f"{impersonate}: {text}"
-
+                if message[0] == last_author and not '(As ' in message[1]:
+                    text = ' '.join(message[1:]).strip()
+                    reply_list[index] = f"{last_impersonate}: {text}"
+                else:
+                    last_author = None
+                    last_impersonate = None
         message = {'action':action, 'content':content.replace(f'@{channel_info['bot_name']}', '').strip(), 'reply_list':reply_list, 'username':username}
 
         future = asyncio.Future()
@@ -123,7 +131,7 @@ class Llama_Chat(object):
                 await self.break_idle.wait()
 
     async def update_llm_config(self, llm_config:dict, frequency_penalty:float=None, presence_penalty:float=None, top_k:int=None, top_p:float=None, typical_p:float=None, min_p:float=None, temperature:float=None,
-        repeat_penalty:float=None, max_tokens:int=None, stop:[str]=None) -> dict:
+        repeat_penalty:float=None, max_tokens:int=None) -> dict:
         """
         Helper function to change a channel's llm generation config.
 
@@ -147,8 +155,6 @@ class Llama_Chat(object):
             llm_config['repeat_penalty'] = repeat_penalty
         if max_tokens:
             llm_config['max_tokens'] = max_tokens
-        if stop:
-            llm_config['stop'] = stop
         return llm_config
 
     def prune_messages_to_list(self, action:str, bot_name:str, impersonate:str, response:str) -> list:
@@ -184,7 +190,6 @@ class Llama_Chat(object):
             """
             chat_log = list(channel_info['chat_log'])
             summaries = channel_info['summaries']
-
             bot_name = channel_info['bot_name'] if not channel_info['impersonate'] else channel_info['impersonate']
 
             # If the message is for a command, use the right prompt for it, otherwise use the default chatbot prompt.
@@ -254,8 +259,7 @@ class Llama_Chat(object):
             else:
                 if message['action'] == 'impersonate':
                     chat_log.clear()
-                    chat_log.append(f"Given the name {message['content']}, write a short but detailed introduction that includes striking elements for character in a descriptive manner.")
-                    chat_log.append(f"--- System Character Creator ---")
+                    chat_log.append(f"Given the name {message['content']}, write a short but detailed character introduction that includes striking personality elements in descriptive manner.")
                     chat_log.append(f"{message['content']}:")
                 else:
                     raise ValueError(f"{message['action']} is not a valid action.")
