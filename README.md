@@ -1,4 +1,4 @@
-# bob-chat-llama-cpp-python
+# bob-chat-llama-cpp-python (W.I.P)
 
 An asynchronous chatroom interface for llama-cpp-python. Has basic prompting for relevant and less uptight responses, as well as making new characters to chat with. Also includes an idle manager to free resources when they are not needed.
 
